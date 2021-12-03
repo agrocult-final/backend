@@ -1,0 +1,117 @@
+version: '2.2'
+
+services:
+  api:
+    ports:
+    - "8000:8000"
+    build:
+      context: .
+      dockerfile: ./deploy/Dockerfile
+    image: agroatom:${AGROATOM_VERSION:-latest}
+    volumes:
+    - ./torch_assets/:/root/.cache/torch
+    - ./:/app/src/
+    restart: always
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  db:
+    image: postgres:13.4-buster
+    hostname: agroatom-db
+    env_file:
+    - .env.db
+    volumes:
+    - agroatom-db-data:/var/lib/postgresql/data
+    restart: always
+    ports:
+    - "5432:5432"
+    healthcheck:
+      test:
+      - CMD
+      - pg_isready
+      - -U
+      - agroatom
+      interval: 2s
+      timeout: 3s
+      retries: 40
+
+  migrator:
+    user: 1000:1000
+    volumes:
+    - ./:/app/src/
+    image: agroatom:${AGROATOM_VERSION:-latest}
+    restart: "no"
+    command: aerich upgrade
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tasks-scheduler:
+    volumes:
+    - ./:/app/src/
+    - ./torch_assets/:/root/.cache/torch
+    image: agroatom:${AGROATOM_VERSION:-latest}
+    restart: always
+    command: sh -c "python3 -m agroatom.tasks.scheduler"
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tasks-actors-ycc:
+    volumes:
+    - ./:/app/src/
+    - ./torch_assets/:/root/.cache/torch
+    image: agroatom:${AGROATOM_VERSION:-latest}
+    restart: always
+    command: sh -c "python3 -m agroatom.tasks.actors.yield_calculation_container"
+    env_file:
+    - .env
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  tasks-dashboard:
+    image: eoranged/rq-dashboard
+    restart: always
+    depends_on:
+      redis:
+        condition: service_healthy
+    ports:
+    - "9181:9181"
+    env_file:
+    - .env.workers_dashboard
+
+  redis:
+    image: bitnami/redis:6.2.5
+    hostname: agroatom-redis
+    restart: always
+    environment:
+      ALLOW_EMPTY_PASSWORD: "yes"
+    healthcheck:
+      test:
+      - CMD
+      - redis-cli
+      - ping
+      interval: 1s
+      timeout: 3s
+      retries: 30
+
+
+volumes:
+  agroatom-db-data:
+    name: agroatom-db-data
